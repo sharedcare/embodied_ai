@@ -64,9 +64,9 @@ class ChainlitUserProxyAgent(UserProxyAgent):
             if res.get("value") == "exit":
                 return "exit"
 
-        reply = cl.run_sync(ask_helper(cl.AskUserMessage, content=prompt, timeout=60))
+        reply = cl.run_sync(ask_helper(cl.AskUserMessage, content=prompt))
 
-        return reply["content"].strip()
+        return reply["output"].strip()
 
     def send(
         self,
@@ -140,7 +140,7 @@ async def main(message: cl.Message):
         prompt = message.content
 
     await cl.Message(
-        content=f"Vision agent working on task: {message.content}..."
+        content=f"Vision agent working on task: {message.content}."
     ).send()
 
     await cl.make_async(user_proxy.initiate_chat)(

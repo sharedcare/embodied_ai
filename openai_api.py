@@ -296,9 +296,9 @@ def process_history_and_images(
             for item in content:
                 if isinstance(item, ImageUrlContent):
                     image_url = item.image_url.url
-                    if re.search("data:image/.+;base64,", image_url):
+                    if re.match("data:image/.+;base64,", image_url):
                         base64_encoded_image = re.sub(
-                            "data:image/jpeg;base64,", "", image_url
+                            "data:image/.+;base64,", "", image_url, count=1
                         )
                         image_data = base64.b64decode(base64_encoded_image)
                         image = Image.open(BytesIO(image_data)).convert("RGB")
@@ -341,56 +341,67 @@ def generate_stream_cogvlm(
 
     logger.debug(f"==== request ====\n{query}")
 
-    input_by_model = model.build_conversation_input_ids(
-        tokenizer, query=query, history=history, images=[image_list[-1]]
-    )
-    inputs = {
-        "input_ids": input_by_model["input_ids"].unsqueeze(0).to(DEVICE),
-        "token_type_ids": input_by_model["token_type_ids"].unsqueeze(0).to(DEVICE),
-        "attention_mask": input_by_model["attention_mask"].unsqueeze(0).to(DEVICE),
-        "images": [[input_by_model["images"][0].to(DEVICE).to(torch_type)]],
-    }
-    if "cross_images" in input_by_model and input_by_model["cross_images"]:
-        inputs["cross_images"] = [
-            [input_by_model["cross_images"][0].to(DEVICE).to(torch_type)]
-        ]
+    if len(image_list) > 0:
+        input_by_model = model.build_conversation_input_ids(
+            tokenizer, query=query, history=history, images=[image_list[-1]]
+        )
+        inputs = {
+            "input_ids": input_by_model["input_ids"].unsqueeze(0).to(DEVICE),
+            "token_type_ids": input_by_model["token_type_ids"].unsqueeze(0).to(DEVICE),
+            "attention_mask": input_by_model["attention_mask"].unsqueeze(0).to(DEVICE),
+            "images": [[input_by_model["images"][0].to(DEVICE).to(torch_type)]],
+        }
+        if "cross_images" in input_by_model and input_by_model["cross_images"]:
+            inputs["cross_images"] = [
+                [input_by_model["cross_images"][0].to(DEVICE).to(torch_type)]
+            ]
 
-    input_echo_len = len(inputs["input_ids"][0])
-    streamer = TextIteratorStreamer(
-        tokenizer=tokenizer, timeout=60.0, skip_prompt=True, skip_special_tokens=True
-    )
-    gen_kwargs = {
-        "repetition_penalty": repetition_penalty,
-        "max_new_tokens": max_new_tokens,
-        "do_sample": True if temperature > 1e-5 else False,
-        "top_p": top_p if temperature > 1e-5 else 0,
-        "streamer": streamer,
-    }
-    if temperature > 1e-5:
-        gen_kwargs["temperature"] = temperature
+        input_echo_len = len(inputs["input_ids"][0])
+        streamer = TextIteratorStreamer(
+            tokenizer=tokenizer, timeout=60.0, skip_prompt=True, skip_special_tokens=True
+        )
+        gen_kwargs = {
+            "repetition_penalty": repetition_penalty,
+            "max_new_tokens": max_new_tokens,
+            "do_sample": True if temperature > 1e-5 else False,
+            "top_p": top_p if temperature > 1e-5 else 0,
+            "streamer": streamer,
+        }
+        if temperature > 1e-5:
+            gen_kwargs["temperature"] = temperature
 
-    total_len = 0
-    generated_text = ""
-    with torch.no_grad():
-        model.generate(**inputs, **gen_kwargs)
-        for next_text in streamer:
-            generated_text += next_text
-            yield {
-                "text": generated_text,
-                "usage": {
-                    "prompt_tokens": input_echo_len,
-                    "completion_tokens": total_len - input_echo_len,
-                    "total_tokens": total_len,
-                },
-            }
-    ret = {
-        "text": generated_text,
-        "usage": {
-            "prompt_tokens": input_echo_len,
-            "completion_tokens": total_len - input_echo_len,
-            "total_tokens": total_len,
-        },
-    }
+        total_len = 0
+        generated_text = ""
+        with torch.no_grad():
+            model.generate(**inputs, **gen_kwargs)
+            for next_text in streamer:
+                generated_text += next_text
+                yield {
+                    "text": generated_text,
+                    "usage": {
+                        "prompt_tokens": input_echo_len,
+                        "completion_tokens": total_len - input_echo_len,
+                        "total_tokens": total_len,
+                    },
+                }
+        ret = {
+            "text": generated_text,
+            "usage": {
+                "prompt_tokens": input_echo_len,
+                "completion_tokens": total_len - input_echo_len,
+                "total_tokens": total_len,
+            },
+        }
+    else:
+        generated_text = "An image input is required!"
+        ret = {
+            "text": generated_text,
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            },
+        }
     yield ret
 
 
