@@ -1,9 +1,11 @@
 import json
+import base64
 import logging
 from typing import List, Optional, Tuple
 
 import requests
 
+from PIL.Image import isImageType
 from autogen.agentchat.agent import Agent
 from autogen.agentchat.contrib.multimodal_conversable_agent import MultimodalConversableAgent
 from autogen.code_utils import content_str
@@ -20,9 +22,24 @@ logger = logging.getLogger(__name__)
 # we will override the following variables later.
 SEP = "###"
 
-DEFAULT_LLAVA_SYS_MSG = "You are an AI agent and you can view images."
+DEFAULT_COG_SYS_MSG = "You are an AI agent and you can view images."
 
-def cog_vlm_call(messages: list, config: dict, max_new_tokens: int = 1000, temperature: float = 0.8, top_p: float = 0.8, use_stream: bool = False):
+def serialize_data(data: dict):
+    """Serialize the json data and convert Image to base64 encoded string
+    """
+    for d in data["messages"]:
+        for c in d["content"]:
+            if c["type"] == "image_url":
+                img = c["image_url"]["url"]
+                if isImageType(img):
+                    img_prefix = f"data:image/{img.format.lower()};base64,"
+                    img_bytes = img.tobytes()
+                    img_b64 = base64.b64encode(img_bytes)
+                    c["image_url"]["url"] = img_prefix + img_b64
+    return data
+
+def cog_vlm_call(messages: list, config: dict, max_new_tokens: int = 1000, temperature: float = 0.8,
+                 top_p: float = 0.8, use_stream: bool = False):
     """
     This function sends a request to the chat API to generate a response based on the given messages.
     Refer to: https://github.com/THUDM/CogVLM/blob/main/openai_demo/openai_api_request.py
@@ -47,7 +64,8 @@ def cog_vlm_call(messages: list, config: dict, max_new_tokens: int = 1000, tempe
         "top_p": top_p,
         # "stop": SEP,
     }
-    
+    data = serialize_data(data)
+
     response = requests.post(
             config["base_url"].rstrip("/") + "/v1/chat/completions", headers=headers, json=data, stream=use_stream
         )
@@ -76,7 +94,7 @@ class CogVLMAgent(MultimodalConversableAgent):
     def __init__(
         self,
         name: str,
-        system_message: Optional[Tuple[str, List]] = DEFAULT_LLAVA_SYS_MSG,
+        system_message: Optional[Tuple[str, List]] = DEFAULT_COG_SYS_MSG,
         *args,
         **kwargs,
     ):
