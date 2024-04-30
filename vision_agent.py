@@ -24,20 +24,6 @@ SEP = "###"
 
 DEFAULT_COG_SYS_MSG = "You are an AI agent and you can view images."
 
-def serialize_data(data: dict):
-    """Serialize the json data and convert Image to base64 encoded string
-    """
-    for d in data["messages"]:
-        for c in d["content"]:
-            if c["type"] == "image_url":
-                img = c["image_url"]["url"]
-                if isImageType(img):
-                    img_prefix = f"data:image/{img.format.lower()};base64,"
-                    img_bytes = img.tobytes()
-                    img_b64 = base64.b64encode(img_bytes)
-                    c["image_url"]["url"] = img_prefix + img_b64
-    return data
-
 def cog_vlm_call(messages: list, config: dict, max_new_tokens: int = 1000, temperature: float = 0.8,
                  top_p: float = 0.8, use_stream: bool = False):
     """
@@ -64,7 +50,6 @@ def cog_vlm_call(messages: list, config: dict, max_new_tokens: int = 1000, tempe
         "top_p": top_p,
         # "stop": SEP,
     }
-    data = serialize_data(data)
 
     response = requests.post(
             config["base_url"].rstrip("/") + "/v1/chat/completions", headers=headers, json=data, stream=use_stream
