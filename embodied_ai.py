@@ -64,7 +64,7 @@ class ChainlitUserProxyAgent(UserProxyAgent):
             if res.get("value") == "exit":
                 return "exit"
 
-        reply = cl.run_sync(ask_helper(cl.AskUserMessage, content=prompt))
+        reply = cl.run_sync(ask_helper(cl.AskUserMessage, content=prompt, timeout=1e6))
 
         return reply["output"].strip()
 
