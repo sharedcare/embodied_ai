@@ -3,6 +3,7 @@ import gc
 import time
 import base64
 import re
+import argparse
 
 from contextlib import asynccontextmanager
 from typing import List, Literal, Union, Tuple, Optional
@@ -23,20 +24,12 @@ from transformers import (
 from PIL import Image
 from io import BytesIO
 
-MODEL_PATH = os.environ.get("MODEL_PATH", "THUDM/cogvlm-chat-hf")
-TOKENIZER_PATH = os.environ.get("TOKENIZER_PATH", "lmsys/vicuna-7b-v1.5")
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-if os.environ.get("QUANT_ENABLED"):
-    QUANT_ENABLED = True
+if torch.cuda.is_available():
+    DEVICE = "cuda"
+elif torch.backends.mps.is_available():
+    DEVICE = "mps"
 else:
-    with torch.cuda.device(DEVICE):
-        __, total_bytes = torch.cuda.mem_get_info()
-        total_gb = total_bytes / (1 << 30)
-        if total_gb < 40:
-            QUANT_ENABLED = True
-        else:
-            QUANT_ENABLED = False
-
+    DEVICE = "cpu"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -409,7 +402,19 @@ gc.collect()
 torch.cuda.empty_cache()
 
 if __name__ == "__main__":
-    tokenizer = LlamaTokenizer.from_pretrained(TOKENIZER_PATH, trust_remote_code=True)
+    parser = argparse.ArgumentParser(
+        prog="OpenAI API Local Server",
+        description="",
+    )
+    parser.add_argument('--model_path', default="THUDM/cogvlm-chat-hf")
+    parser.add_argument('-d', '--device', default='cuda')
+    parser.add_argument('-q', '--quant', default=False, action='store_true')
+    parser.add_argument('--tokenizer_path', default="lmsys/vicuna-7b-v1.5")
+    args = parser.parse_args()
+
+    tokenizer = LlamaTokenizer.from_pretrained(
+        args.tokenizer_path, trust_remote_code=True
+    )
 
     if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
         torch_type = torch.bfloat16
@@ -418,37 +423,46 @@ if __name__ == "__main__":
 
     print(
         "========Use torch type as:{} with device:{}========\n\n".format(
-            torch_type, DEVICE
+            torch_type, args.device
         )
     )
 
-    if "cuda" in DEVICE:
-        if QUANT_ENABLED:
+    if "cuda" in args.device:
+        if args.quant:
             model = AutoModelForCausalLM.from_pretrained(
-                MODEL_PATH,
+                args.model_path,
                 load_in_4bit=True,
                 trust_remote_code=True,
                 torch_dtype=torch_type,
                 low_cpu_mem_usage=True,
             ).eval()
         else:
+            with torch.cuda.device(args.device):
+                __, total_bytes = torch.cuda.mem_get_info()
+                total_gb = total_bytes / (1 << 30)
+                if total_gb < 40:
+                    quant = True
+                else:
+                    quant = False
             model = (
                 AutoModelForCausalLM.from_pretrained(
-                    MODEL_PATH,
-                    load_in_4bit=False,
+                    args.model_path,
+                    load_in_4bit=quant,
                     trust_remote_code=True,
                     torch_dtype=torch_type,
                     low_cpu_mem_usage=True,
                 )
-                .to(DEVICE)
+                .to(args.device)
                 .eval()
             )
 
     else:
         model = (
-            AutoModelForCausalLM.from_pretrained(MODEL_PATH, trust_remote_code=True)
+            AutoModelForCausalLM.from_pretrained(
+                args.model_path, trust_remote_code=True
+            )
             .float()
-            .to(DEVICE)
+            .to(args.device)
             .eval()
         )
     uvicorn.run(app, host="0.0.0.0", port=8001, workers=1)

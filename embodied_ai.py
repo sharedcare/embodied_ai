@@ -1,8 +1,9 @@
 from typing import Dict, Optional, Union
 
 from autogen import Agent, AssistantAgent, UserProxyAgent, config_list_from_json
-from vision_agent import CogVLMAgent
+from vision_agent import VisionAgent
 from chainlit import user_session
+from chainlit.input_widget import Select, Switch, Slider
 import chainlit as cl
 
 
@@ -13,7 +14,20 @@ async def ask_helper(func, **kwargs):
     return res
 
 
-class ChainlitVisionAgent(CogVLMAgent):
+class RoboProxy(Agent):
+    """Robot Proxy Agent"""
+    def get_image():
+        """Get RGB image data from the robot's camera
+        """
+        pass
+
+    def get_depth():
+        """Get depth data from the robot's camera
+        """
+        pass
+
+
+class ChainlitVisionAgent(VisionAgent):
     def send(
         self,
         message: Union[Dict, str],
@@ -27,7 +41,7 @@ class ChainlitVisionAgent(CogVLMAgent):
                 author="VisionAgent",
             ).send()
         )
-        super(ChainlitVisionAgent, self).send(
+        super(VisionAgent, self).send(
             message=message,
             recipient=recipient,
             request_reply=request_reply,
@@ -95,11 +109,42 @@ async def on_chat_start():
     message_history = []
     user_session.set("MESSAGE_HISTORY", message_history)
 
+    settings = await cl.ChatSettings(
+        [
+            Select(
+                id="model",
+                label="MultiModal Models",
+                values=[
+                    "llava-1.5-7b-hf",
+                    "cogvlm-chat-17b",
+                    "cogagent-chat-17b",
+                ],
+                initial_index=0,
+            ),
+            Slider(
+                id="temperature",
+                label="Temperature",
+                initial=0.8,
+                min=0,
+                max=2,
+                step=0.1,
+            ),
+            Slider(
+                id="max_tokens",
+                label="Max New Tokens",
+                initial=256,
+                min=0,
+                max=1024,
+                step=2,
+            ),
+        ]
+    ).send()
+
     config_list = config_list_from_json(env_or_file="OAI_CONFIG_LIST")
     vision_assistant = ChainlitVisionAgent(
         name="vision_assistant",
         system_message="A vision assistant",
-        llm_config={"config_list": config_list}
+        llm_config={"config_list": config_list},
     )
     user_proxy = ChainlitUserProxyAgent(
         "user_proxy",
@@ -112,6 +157,28 @@ async def on_chat_start():
     user_session.set("VISION_AGENT", vision_assistant)
     user_session.set("USER_PROXY", user_proxy)
 
+@cl.on_settings_update
+async def setup_agent(settings):
+    config_list = config_list_from_json(env_or_file="OAI_CONFIG_LIST")
+    for k, v in settings.items():
+        config_list[0][k] = v
+    
+    print(config_list)
+    vision_assistant = ChainlitVisionAgent(
+        name="vision_assistant",
+        system_message="A vision assistant",
+        llm_config={"config_list": config_list},
+    )
+    user_proxy = ChainlitUserProxyAgent(
+        "user_proxy",
+        code_execution_config={
+            "work_dir": "workspace",
+            "use_docker": False,
+        },
+    )
+
+    user_session.set("VISION_AGENT", vision_assistant)
+    user_session.set("USER_PROXY", user_proxy)
 
 # On message
 @cl.on_message
@@ -133,8 +200,8 @@ async def main(message: cl.Message):
     user_proxy = user_session.get("USER_PROXY")
 
     if len(images) >= 1:
-        # Set input with imag
-        prompt = f"{message.content}\n<img {images[0].path}>."
+        # Set input with image
+        prompt = f"{message.content}<img {images[-1].path}>"
     else:
         # Set input without image
         prompt = message.content
