@@ -109,6 +109,10 @@ async def on_chat_start():
     message_history = []
     user_session.set("MESSAGE_HISTORY", message_history)
 
+    # With grounding
+    with_grounding = False
+    user_session.set("WITH_GROUNDING", with_grounding)
+
     settings = await cl.ChatSettings(
         [
             Select(
@@ -137,6 +141,11 @@ async def on_chat_start():
                 max=1024,
                 step=2,
             ),
+            Switch(
+                id="with_grounding",
+                label="CogVLM - with grounding",
+                inital=False,
+            )
         ]
     ).send()
 
@@ -177,6 +186,11 @@ async def setup_agent(settings):
         },
     )
 
+    if "cog" in settings["model"]:
+        with_grounding = settings["with_grounding"]
+    else:
+        with_grounding = False
+    user_session.set("WITH_GROUNDING", with_grounding)
     user_session.set("VISION_AGENT", vision_assistant)
     user_session.set("USER_PROXY", user_proxy)
 
@@ -199,15 +213,19 @@ async def main(message: cl.Message):
     # Retrive User Proxy
     user_proxy = user_session.get("USER_PROXY")
 
+    # Retrive with grounding property
+    with_grounding = user_session.get("WITH_GROUNDING")
+    new_token = "with grounding" if with_grounding else ""
+
     if len(images) >= 1:
         # Set input with image
-        prompt = f"{message.content}<img {images[-1].path}>"
+        prompt = f"{message.content}<img {images[-1].path}>{new_token}"
     else:
         # Set input without image
-        prompt = message.content
+        prompt = message.content + new_token
 
     await cl.Message(
-        content=f"Vision agent working on task: {message.content}."
+        content=f"Vision agent working on task: '{message.content}.'"
     ).send()
 
     await cl.make_async(user_proxy.initiate_chat)(
