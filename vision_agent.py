@@ -5,6 +5,7 @@ from typing import List, Optional, Tuple
 import requests
 
 from autogen.agentchat.agent import Agent
+from autogen.agentchat.contrib.img_utils import get_image_data
 from autogen.agentchat.contrib.multimodal_conversable_agent import MultimodalConversableAgent
 from autogen.code_utils import content_str
 
@@ -125,6 +126,13 @@ class VisionAgent(MultimodalConversableAgent):
 
         if messages is None:
             messages = self._oai_messages[sender]
+
+        for msg in messages:
+            for d in msg["content"]:
+                if d["type"] == "image_url":
+                    d["image_url"]["url"] = f'data:image/png;base64,{get_image_data(d["image_url"]["url"])}'
+                elif d["type"] == "text":
+                    print(colored(d["text"], "blue"))
 
         # The formats for CogVLM, LLaVa and GPT are different. So, we manually handle them here.
         out = ""

@@ -1,7 +1,7 @@
 # Embodied AI Demo with AutoGen and Chainlit
 ### Requirements
 ```
-pip install pyautogen==0.2.7 chainlit
+pip install pyautogen chainlit
 ```
 ## Intro
 

@@ -437,17 +437,10 @@ if __name__ == "__main__":
                 low_cpu_mem_usage=True,
             ).eval()
         else:
-            with torch.cuda.device(args.device):
-                __, total_bytes = torch.cuda.mem_get_info()
-                total_gb = total_bytes / (1 << 30)
-                if total_gb < 40:
-                    quant = True
-                else:
-                    quant = False
             model = (
                 AutoModelForCausalLM.from_pretrained(
                     args.model_path,
-                    load_in_4bit=quant,
+                    load_in_4bit=False,
                     trust_remote_code=True,
                     torch_dtype=torch_type,
                     low_cpu_mem_usage=True,
