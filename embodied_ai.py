@@ -1,4 +1,10 @@
 from typing import Dict, Optional, Union
+import io
+import re
+import torch
+import torchvision
+from torchvision.io import read_image
+from torchvision.utils import draw_bounding_boxes
 
 from autogen import Agent, AssistantAgent, UserProxyAgent, config_list_from_json
 from vision_agent import VisionAgent
@@ -35,12 +41,47 @@ class ChainlitVisionAgent(VisionAgent):
         request_reply: Optional[bool] = None,
         silent: Optional[bool] = False,
     ) -> bool:
-        cl.run_sync(
-            cl.Message(
-                content=f'*Sending message to "{recipient.name}":*\n\n{message}',
-                author="VisionAgent",
-            ).send()
-        )
+        coords = re.findall(r"\[\[\d+,\d+,\d+,\d+\]\]", message)
+        coords = [coord.replace("[[", "").replace("]]", "") for coord in coords]
+        coords = [coord.split(",") for coord in coords]
+        # Retrive input image
+        img_path = user_session.get("IMAGE").path
+        # read input image
+        img = read_image(img_path)
+        img_bytes = None
+        for coord in coords:
+            _, height, width = img.shape
+            # bounding box is [x0, y0, x1, y1]
+            box = [(int(pos) / 1000) for pos in coord]
+            box[0] *= width
+            box[1] *= height
+            box[0] *= width
+            box[1] *= height
+            box = torch.tensor(box)
+            box = box.unsqueeze(0)
+            # draw bounding box and fill color
+            img = draw_bounding_boxes(img, box, width=2, colors="red", fill=False)
+            # transform image to PIL image
+            pil_img = torchvision.transforms.ToPILImage()(img)
+            img_bytes = io.BytesIO()
+            pil_img.save(img_bytes, "JPEG")
+        
+        if img_bytes:
+            image = cl.Image(name="bbox_image", content=img_bytes.get_value(), display="inline")
+            cl.run_sync(
+                cl.Message(
+                    content=f'*Sending message to "{recipient.name}":*\n\n{message}',
+                    author="VisionAgent",
+                    elements=[image],
+                ).send()
+            )
+        else:
+            cl.run_sync(
+                cl.Message(
+                    content=f'*Sending message to "{recipient.name}":*\n\n{message}',
+                    author="VisionAgent",
+                ).send()
+            )
         super(VisionAgent, self).send(
             message=message,
             recipient=recipient,
@@ -119,9 +160,10 @@ async def on_chat_start():
                 id="model",
                 label="MultiModal Models",
                 values=[
-                    "llava-1.5-7b-hf",
-                    "cogvlm-chat-17b",
-                    "cogagent-chat-17b",
+                    "llava-1.5",
+                    "cogvlm-chat",
+                    "cogagent-chat",
+                    "cogvlm-grounding-generalist",
                 ],
                 initial_index=0,
             ),
@@ -186,7 +228,7 @@ async def setup_agent(settings):
         },
     )
 
-    if "cog" in settings["model"]:
+    if settings["model"] in ["cogagent-chat", "cogvlm-grounding-generalist"]:
         with_grounding = settings["with_grounding"]
     else:
         with_grounding = False
@@ -215,11 +257,12 @@ async def main(message: cl.Message):
 
     # Retrive with grounding property
     with_grounding = user_session.get("WITH_GROUNDING")
-    new_token = "with grounding" if with_grounding else ""
+    new_token = "(with grounding)" if with_grounding else ""
 
     if len(images) >= 1:
         # Set input with image
-        prompt = f"{message.content}<img {images[-1].path}>{new_token}"
+        prompt = f"{message.content}{new_token}<img {images[-1].path}>"
+        user_session.set("IMAGE", images[-1])
     else:
         # Set input without image
         prompt = message.content + new_token
