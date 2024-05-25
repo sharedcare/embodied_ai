@@ -20,19 +20,6 @@ async def ask_helper(func, **kwargs):
     return res
 
 
-class RoboProxy(Agent):
-    """Robot Proxy Agent"""
-    def get_image():
-        """Get RGB image data from the robot's camera
-        """
-        pass
-
-    def get_depth():
-        """Get depth data from the robot's camera
-        """
-        pass
-
-
 class ChainlitVisionAgent(VisionAgent):
     def send(
         self,
