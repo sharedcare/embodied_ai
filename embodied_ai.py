@@ -151,6 +151,7 @@ async def on_chat_start():
                     "cogvlm-chat",
                     "cogagent-chat",
                     "cogvlm-grounding-generalist",
+                    "qwen-vl-chat",
                 ],
                 initial_index=0,
             ),
@@ -172,7 +173,7 @@ async def on_chat_start():
             ),
             Switch(
                 id="with_grounding",
-                label="CogVLM - with grounding",
+                label="CogVLM/Qwen-VL - with grounding",
                 inital=False,
             )
         ]
@@ -215,7 +216,7 @@ async def setup_agent(settings):
         },
     )
 
-    if settings["model"] in ["cogagent-chat", "cogvlm-grounding-generalist"]:
+    if settings["model"] in ["cogagent-chat", "cogvlm-grounding-generalist", "qwen-vl-chat"]:
         with_grounding = settings["with_grounding"]
     else:
         with_grounding = False

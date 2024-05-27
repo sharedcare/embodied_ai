@@ -54,6 +54,8 @@ def vision_call(
         agent = "CogVLM"
     elif "cogagent" in config["model"]:
         agent = "CogAgent"
+    elif "qwen" in config["model"]:
+        agent = "Qwen-VL"
 
     headers = {"User-Agent": f"{agent} Client"}
     data = {

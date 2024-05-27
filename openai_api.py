@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 from transformers import (
     AutoModelForCausalLM,
+    AutoTokenizer,
     LlamaTokenizer,
     PreTrainedModel,
     PreTrainedTokenizer,
@@ -151,10 +152,13 @@ async def list_models():
     An endpoint to list available models. It returns a list of model cards.
     This is useful for clients to query and understand what models are available for use.
     """
-    model_card = ModelCard(
+    cogvlm_model_card = ModelCard(
         id="cogvlm-chat-17b"
     )  # can be replaced by your model id like cogagent-chat-18b
-    return ModelList(data=[model_card])
+    qwen_model_card = ModelCard(
+        id="Qwen-VL-Chat"
+    )  # can be replaced by your model id like cogagent-chat-18b
+    return ModelList(data=[cogvlm_model_card, qwen_model_card])
 
 
 @app.post("/v1/chat/completions", response_model=ChatCompletionResponse)
@@ -163,20 +167,31 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
     if len(request.messages) < 1 or request.messages[-1].role == "assistant":
         raise HTTPException(status_code=400, detail="Invalid request")
+    
+    if "qwen" in request.model:
+        gen_params = dict(
+            messages=request.messages,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            max_tokens=request.max_tokens or 1024,
+            echo=False,
+            stream=request.stream,
+        )
+        response = generate_qwen(model, tokenizer, gen_params)
+    elif "cog" in request.model:
+        gen_params = dict(
+            messages=request.messages,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            max_tokens=request.max_tokens or 1024,
+            echo=False,
+            stream=request.stream,
+        )
 
-    gen_params = dict(
-        messages=request.messages,
-        temperature=request.temperature,
-        top_p=request.top_p,
-        max_tokens=request.max_tokens or 1024,
-        echo=False,
-        stream=request.stream,
-    )
-
-    if request.stream:
-        generate = predict(request.model, gen_params)
-        return EventSourceResponse(generate, media_type="text/event-stream")
-    response = generate_cogvlm(model, tokenizer, gen_params)
+        if request.stream:
+            generate = predict(request.model, gen_params)
+            return EventSourceResponse(generate, media_type="text/event-stream")
+        response = generate_cogvlm(model, tokenizer, gen_params)
 
     usage = UsageInfo()
 
@@ -256,6 +271,19 @@ def generate_cogvlm(
     return response
 
 
+def generate_qwen(
+    model: PreTrainedModel, tokenizer: PreTrainedTokenizer, params: dict
+):
+    """
+    Generates a response using the Qwen-VL model. It processes the chat history and image data, if any,
+    and then invokes the model to generate a response.
+    """
+
+    for response in generate_stream_qwen(model, tokenizer, params):
+        pass
+    return response
+
+
 def process_history_and_images(
     messages: List[ChatMessageInput],
 ) -> Tuple[Optional[str], Optional[List[Tuple[str, str]]], Optional[List[Image.Image]]]:
@@ -315,6 +343,75 @@ def process_history_and_images(
             assert False, f"unrecognized role: {role}"
 
     return last_user_query, formatted_history, image_list
+
+
+def process_qwen_history(
+    messages: List[ChatMessageInput],
+) -> Tuple[Optional[str], Optional[List[Tuple[str, str]]], Optional[List[Image.Image]]]:
+    """
+    Process history messages to extract text, identify the last user query,
+    and convert base64 encoded image URLs to PIL images.
+
+    Args:
+        messages(List[ChatMessageInput]): List of ChatMessageInput objects.
+    return: A tuple of three elements:
+             - The last user query as a string.
+             - Text history formatted as a list of tuples for the model.
+             - List of PIL Image objects extracted from the messages.
+    """
+    formatted_history = []
+    image_list = []
+    last_user_query = ""
+    if not os.path.exists('.tmp/'):
+        os.makedirs('.tmp/')
+
+    for i, message in enumerate(messages):
+        role = message.role
+        content = message.content
+
+        if isinstance(content, list):  # text
+            text_content = " ".join(
+                item.text for item in content if isinstance(item, TextContent)
+            )
+        else:
+            text_content = content
+
+        if isinstance(content, list):  # image
+            for item in content:
+                if isinstance(item, ImageUrlContent):
+                    image_url = item.image_url.url
+                    if re.match("data:image/.+;base64,", image_url):
+                        base64_encoded_image = re.sub(
+                            "data:image/.+;base64,", "", image_url, count=1
+                        )
+                        image_data = base64.b64decode(base64_encoded_image)
+                        image = Image.open(BytesIO(image_data)).convert("RGB")
+                        image_path = f".tmp/{len(image_list)}.png"
+                        image.save(image_path)
+                        image_list.append(image_path)
+
+        if role == "user":
+            image_query = ""
+            for idx, image_path in enumerate(image_list):
+                image_query += f"Picture {idx + 1}: <img>{image_path}</img>\n"
+            if i == len(messages) - 1:  # 最后一条用户消息
+                last_user_query = image_query + text_content
+            else:
+                formatted_history.append((image_query + text_content, ""))
+            image_list = []
+        elif role == "assistant":
+            if formatted_history:
+                if formatted_history[-1][1] != "":
+                    assert (
+                        False
+                    ), f"the last query is answered. answer again. {formatted_history[-1][0]}, {formatted_history[-1][1]}, {text_content}"
+                formatted_history[-1] = (formatted_history[-1][0], text_content)
+            else:
+                assert False, f"assistant reply before user"
+        else:
+            assert False, f"unrecognized role: {role}"
+
+    return last_user_query, formatted_history
 
 
 @torch.inference_mode()
@@ -398,6 +495,58 @@ def generate_stream_cogvlm(
     yield ret
 
 
+@torch.inference_mode()
+def generate_stream_qwen(
+    model: PreTrainedModel, tokenizer: PreTrainedTokenizer, params: dict
+):
+    """
+    Generates a stream of responses using the Qwen-VL model in inference mode.
+    It's optimized to handle continuous input-output interactions with the model in a streaming manner.
+    """
+    messages = params["messages"]
+    temperature = float(params.get("temperature", 1.0))
+    repetition_penalty = float(params.get("repetition_penalty", 1.0))
+    top_p = float(params.get("top_p", 1.0))
+    max_new_tokens = int(params.get("max_tokens", 256))
+    query, history = process_qwen_history(messages)
+    input_echo_len = max_new_tokens + len(query)
+
+    logger.debug(f"==== request ====\n{query}")
+
+    gen_kwargs = {
+        "repetition_penalty": repetition_penalty,
+        "max_new_tokens": max_new_tokens,
+        "do_sample": True if temperature > 1e-5 else False,
+        "top_p": top_p if temperature > 1e-5 else 0,
+    }
+    if temperature > 1e-5:
+        gen_kwargs["temperature"] = temperature
+
+    total_len = 0
+    generated_text = ""
+    with torch.no_grad():
+        streamer = model.chat_stream(tokenizer, query=query, history=history, **gen_kwargs)
+        for next_text in streamer:
+            generated_text = next_text
+            yield {
+                "text": generated_text,
+                "usage": {
+                    "prompt_tokens": input_echo_len,
+                    "completion_tokens": total_len - input_echo_len,
+                    "total_tokens": total_len,
+                },
+            }
+    ret = {
+        "text": generated_text,
+        "usage": {
+            "prompt_tokens": input_echo_len,
+            "completion_tokens": total_len - input_echo_len,
+            "total_tokens": total_len,
+        },
+    }
+    yield ret
+
+
 gc.collect()
 torch.cuda.empty_cache()
 
@@ -410,11 +559,19 @@ if __name__ == "__main__":
     parser.add_argument('-d', '--device', default='cuda')
     parser.add_argument('-q', '--quant', default=False, action='store_true')
     parser.add_argument('--tokenizer_path', default="lmsys/vicuna-7b-v1.5")
+    parser.add_argument('--model_name', default="cogvlm")
     args = parser.parse_args()
 
-    tokenizer = LlamaTokenizer.from_pretrained(
-        args.tokenizer_path, trust_remote_code=True
-    )
+    if "qwen" in args.model_name:
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.tokenizer_path, trust_remote_code=True
+        )
+    elif "cog" in args.model_name:
+        tokenizer = LlamaTokenizer.from_pretrained(
+            args.tokenizer_path, trust_remote_code=True
+        )
+    else:
+        raise ValueError(f"model {args.model_name} is not supported!")
 
     if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
         torch_type = torch.bfloat16
