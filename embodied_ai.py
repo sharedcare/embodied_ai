@@ -1,10 +1,12 @@
 from typing import Dict, Optional, Union
 import io
 import re
+import random
 import torch
 import torchvision
 from torchvision.io import read_image
 from torchvision.utils import draw_bounding_boxes
+import matplotlib.colors as mcolors
 
 from autogen import Agent, AssistantAgent, UserProxyAgent, config_list_from_json
 from vision_agent import VisionAgent
@@ -28,33 +30,51 @@ class ChainlitVisionAgent(VisionAgent):
         request_reply: Optional[bool] = None,
         silent: Optional[bool] = False,
     ) -> bool:
-        coords = re.findall(r"\[\[\d+,\d+,\d+,\d+\]\]", message)
-        coords = [coord.replace("[[", "").replace("]]", "") for coord in coords]
-        coords = [coord.split(",") for coord in coords]
+        model_name = user_session.get("SETTINGS")["model"]
+        labels = None
+        if "qwen" in model_name.lower():
+            labels = re.findall(r"<ref>[^<>]+<\/ref>", message)
+            labels = [label.replace("<ref>", "").replace("</ref>", "") for label in labels]
+            coords = re.findall(r"<box>[^<>]+<\/box>", message)
+            coords = [coord.replace("<box>", "").replace("</box>", "").replace("(", "").replace(")", "") for coord in coords]
+            coords = [coord.split(",") for coord in coords]
+        elif "cog" in model_name.lower():
+            coords = re.findall(r"\[\[\d+,\d+,\d+,\d+\]\]", message)
+            coords = [coord.replace("[[", "").replace("]]", "") for coord in coords]
+            coords = [coord.split(",") for coord in coords]
         # Retrive input image
         img_path = user_session.get("IMAGE").path
         # read input image
         img = read_image(img_path)
         img_bytes = None
+        boxes = []
+        colors = []
+        _, height, width = img.shape
         for coord in coords:
-            _, height, width = img.shape
             # bounding box is [x0, y0, x1, y1]
             box = [(int(pos) / 1000) for pos in coord]
             box[0] *= width
             box[1] *= height
-            box[0] *= width
-            box[1] *= height
+            box[2] *= width
+            box[3] *= height
             box = torch.tensor(box)
             box = box.unsqueeze(0)
+            boxes.append(box)
+            colors.append(random.choice([_ for _ in mcolors.TABLEAU_COLORS.values()])) # init color
+
+        font_size = width // 30
+        line_width = width // 100
+        font_path = "SimSun.ttf"
+        if len(boxes) > 0:
+            boxes = torch.cat(boxes)
             # draw bounding box and fill color
-            img = draw_bounding_boxes(img, box, width=2, colors="red", fill=False)
+            img = draw_bounding_boxes(img, boxes, labels=labels, width=line_width, font=font_path, font_size=font_size, colors=colors, fill=True)
             # transform image to PIL image
             pil_img = torchvision.transforms.ToPILImage()(img)
             img_bytes = io.BytesIO()
             pil_img.save(img_bytes, "JPEG")
-        
-        if img_bytes:
-            image = cl.Image(name="bbox_image", content=img_bytes.get_value(), display="inline")
+
+            image = cl.Image(name="bbox_image", content=img_bytes.getvalue(), display="inline")
             cl.run_sync(
                 cl.Message(
                     content=f'*Sending message to "{recipient.name}":*\n\n{message}',
@@ -141,18 +161,22 @@ async def on_chat_start():
     with_grounding = False
     user_session.set("WITH_GROUNDING", with_grounding)
 
-    settings = await cl.ChatSettings(
-        [
-            Select(
-                id="model",
-                label="MultiModal Models",
-                values=[
+    config_list = config_list_from_json(env_or_file="OAI_CONFIG_LIST")
+
+    models = [
                     "llava-1.5",
                     "cogvlm-chat",
                     "cogagent-chat",
                     "cogvlm-grounding-generalist",
                     "qwen-vl-chat",
-                ],
+                ]
+
+    settings = await cl.ChatSettings(
+        [
+            Select(
+                id="model",
+                label="MultiModal Models",
+                values=models,
                 initial_index=0,
             ),
             Slider(
@@ -179,7 +203,6 @@ async def on_chat_start():
         ]
     ).send()
 
-    config_list = config_list_from_json(env_or_file="OAI_CONFIG_LIST")
     vision_assistant = ChainlitVisionAgent(
         name="vision_assistant",
         system_message="A vision assistant",
@@ -195,6 +218,7 @@ async def on_chat_start():
 
     user_session.set("VISION_AGENT", vision_assistant)
     user_session.set("USER_PROXY", user_proxy)
+    user_session.set("SETTINGS", settings)
 
 @cl.on_settings_update
 async def setup_agent(settings):
@@ -223,6 +247,7 @@ async def setup_agent(settings):
     user_session.set("WITH_GROUNDING", with_grounding)
     user_session.set("VISION_AGENT", vision_assistant)
     user_session.set("USER_PROXY", user_proxy)
+    user_session.set("SETTINGS", settings)
 
 # On message
 @cl.on_message
