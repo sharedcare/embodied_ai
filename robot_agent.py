@@ -1,79 +1,76 @@
 import os
+from typing import List, Optional, Tuple
 import numpy as np
-import pyrealsense2 as rs
 import cv2
 
 from PIL import Image
-from autogen import Agent
+from autogen import UserProxyAgent
 
 
-class RobotAgent(Agent):
-    def __init__(self):
-        super.__init__(self)
-        # Create a pipeline
-        self.pipeline = rs.pipeline()
-    
-        # Create a config object to configure the pipeline
-        self.config = rs.config()
-        self.config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-        self.config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-        
+DEFAULT_ROBOT_SYS_MSG = "You are a robot agent."
+
+
+class RobotAgent(UserProxyAgent):
+    def __init__(
+        self,
+        name: str,
+        system_message: Optional[Tuple[str, List]] = DEFAULT_ROBOT_SYS_MSG,
+        *args,
+        **kwargs,
+    ):
+        """
+        Args:
+            name (str): agent name.
+            system_message (str): system message for the ChatCompletion inference.
+                Please override this attribute if you want to reprogram the agent.
+            **kwargs (dict): Please refer to other kwargs in
+                [ConversableAgent](../conversable_agent#__init__).
+        """
+        super().__init__(
+            name,
+            system_message=system_message,
+            *args,
+            **kwargs,
+        )
+
     """Robot Proxy Agent"""
-    def get_image():
-        """Get RGB image data from the robot's camera
-        """
-        if os.path.exists('.tmp/color.png'):
-            return Image.open('.tmp/color.png')
-        
-        return None
 
-    def get_depth():
-        """Get depth data from the robot's camera
-        """
-        if os.path.exists('.tmp/depth.npy'):
-            return np.load('.tmp/depth.npy')
-        
-        return None
+    def get_image(self):
+        """Get RGB image data from the robot's camera"""
+        if os.path.exists(".tmp/image.png"):
+            return Image.open(".tmp/image.png")
+        else:
+            cam = cv2.VideoCapture(0)
+            result, image = cam.read()
+            return image
 
-    def start_pipeline():
-        # Start the pipeline
-        self.pipeline.start(self.config)
-        align = rs.align(rs.stream.color)  # Create align object for depth-color alignment
+    def get_object_position(self, bounding_box):
+        """Get object position in the real world with (x, y, z)"""
+        x0 = bounding_box[0]
+        y0 = bounding_box[1]
+        x1 = bounding_box[2]
+        y1 = bounding_box[3]
+        x = (x0 + x1) / 2
+        y = (y0 + y1) / 2
+        z = 10
+        object_pos = (x, y, 10)
+        return object_pos
 
-        num = 0
-        try:
-            while True:
-                # Wait for a coherent pair of frames: color and depth
-                frames = self.pipeline.wait_for_frames()
-                aligned_frames = align.process(frames)
-                if not aligned_frames:
-                    continue  # If alignment fails, go back to the beginning of the loop
-    
-                color_frame = aligned_frames.get_color_frame()
-                aligned_depth_frame = aligned_frames.get_depth_frame()
-    
-                if not color_frame or not aligned_depth_frame:
-                    continue
-    
-                # Convert aligned_depth_frame and color_frame to numpy arrays
-                aligned_depth_image = np.asanyarray(aligned_depth_frame.get_data())
-                color_image = np.asanyarray(color_frame.get_data())
-    
-                # Display the aligned depth image
-                aligned_depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(aligned_depth_image, alpha=0.03),
-                                                           cv2.COLORMAP_JET)
+    def get_grasp_pose(self, bounding_box):
+        """Get grasp pose for the robot arm with [x, y, z, roll, pitch, yaw, gripper_closed]"""
+        x0 = bounding_box[0]
+        y0 = bounding_box[1]
+        x1 = bounding_box[2]
+        y1 = bounding_box[3]
+        x = (x0 + x1) / 20
+        y = (y0 + y1) / 20
+        z = 1
+        roll, pitch, yaw = [0, np.pi / 2, np.pi]
+        grasp_pose = [x, y, z, roll, pitch, yaw, 1]
+        return grasp_pose
 
-                np.save('.tmp/depth.npy', aligned_depth_image)
-                cv2.imwrite('.tmp/color.png', color_image)
-
-                num += 1
-
-        finally:
-            # Stop the pipeline and close all windows
-            self.pipeline.stop()
-            
-    def stop_pipeline():
-        self.pipeline.stop()
-        
-    def grasp(bbox, color=None, depth=None):
-        pass
+    def robot_execute(self, object_name, grasp_pose, place_position):
+        print(f"Place {object_name} on {place_position}")
+        ...
+        status = "success"
+        return status

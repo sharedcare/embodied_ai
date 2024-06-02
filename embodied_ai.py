@@ -2,14 +2,23 @@ from typing import Dict, Optional, Union
 import io
 import re
 import random
+import cv2
 import torch
 import torchvision
 from torchvision.io import read_image
 from torchvision.utils import draw_bounding_boxes
 import matplotlib.colors as mcolors
 
-from autogen import Agent, AssistantAgent, UserProxyAgent, config_list_from_json
+from autogen import (
+    Agent,
+    AssistantAgent,
+    UserProxyAgent,
+    GroupChat,
+    GroupChatManager,
+    config_list_from_json,
+)
 from vision_agent import VisionAgent
+from robot_agent import RobotAgent
 from chainlit import user_session
 from chainlit.input_widget import Select, Switch, Slider
 import chainlit as cl
@@ -34,14 +43,24 @@ class ChainlitVisionAgent(VisionAgent):
         labels = None
         if "qwen" in model_name.lower():
             labels = re.findall(r"<ref>[^<>]+<\/ref>", message)
-            labels = [label.replace("<ref>", "").replace("</ref>", "") for label in labels]
+            labels = [
+                label.replace("<ref>", "").replace("</ref>", "") for label in labels
+            ]
             coords = re.findall(r"<box>[^<>]+<\/box>", message)
-            coords = [coord.replace("<box>", "").replace("</box>", "").replace("(", "").replace(")", "") for coord in coords]
+            coords = [
+                coord.replace("<box>", "")
+                .replace("</box>", "")
+                .replace("(", "")
+                .replace(")", "")
+                for coord in coords
+            ]
             coords = [coord.split(",") for coord in coords]
         elif "cog" in model_name.lower():
             coords = re.findall(r"\[\[\d+,\d+,\d+,\d+\]\]", message)
             coords = [coord.replace("[[", "").replace("]]", "") for coord in coords]
             coords = [coord.split(",") for coord in coords]
+        else:
+            coords = []
         # Retrive input image
         img_path = user_session.get("IMAGE").path
         # read input image
@@ -60,7 +79,9 @@ class ChainlitVisionAgent(VisionAgent):
             box = torch.tensor(box)
             box = box.unsqueeze(0)
             boxes.append(box)
-            colors.append(random.choice([_ for _ in mcolors.TABLEAU_COLORS.values()])) # init color
+            colors.append(
+                random.choice([_ for _ in mcolors.TABLEAU_COLORS.values()])
+            )  # init color
 
         font_size = width // 30
         line_width = width // 100
@@ -68,13 +89,24 @@ class ChainlitVisionAgent(VisionAgent):
         if len(boxes) > 0:
             boxes = torch.cat(boxes)
             # draw bounding box and fill color
-            img = draw_bounding_boxes(img, boxes, labels=labels, width=line_width, font=font_path, font_size=font_size, colors=colors, fill=True)
+            img = draw_bounding_boxes(
+                img,
+                boxes,
+                labels=labels,
+                width=line_width,
+                font=font_path,
+                font_size=font_size,
+                colors=colors,
+                fill=True,
+            )
             # transform image to PIL image
             pil_img = torchvision.transforms.ToPILImage()(img)
             img_bytes = io.BytesIO()
             pil_img.save(img_bytes, "JPEG")
 
-            image = cl.Image(name="bbox_image", content=img_bytes.getvalue(), display="inline")
+            image = cl.Image(
+                name="bbox_image", content=img_bytes.getvalue(), display="inline"
+            )
             cl.run_sync(
                 cl.Message(
                     content=f'*Sending message to "{recipient.name}":*\n\n{message}',
@@ -90,6 +122,82 @@ class ChainlitVisionAgent(VisionAgent):
                 ).send()
             )
         super(VisionAgent, self).send(
+            message=message,
+            recipient=recipient,
+            request_reply=request_reply,
+            silent=silent,
+        )
+
+
+class ChainlitRobotAgent(RobotAgent):
+    def send(
+        self,
+        message: Union[Dict, str],
+        recipient: Agent,
+        request_reply: Optional[bool] = None,
+        silent: Optional[bool] = False,
+    ) -> None:
+        model_name = user_session.get("SETTINGS")["model"]
+        labels = None
+        if "qwen" in model_name.lower():
+            labels = re.findall(r"<ref>[^<>]+<\/ref>", message)
+            labels = [
+                label.replace("<ref>", "").replace("</ref>", "") for label in labels
+            ]
+            coords = re.findall(r"<box>[^<>]+<\/box>", message)
+            coords = [
+                coord.replace("<box>", "")
+                .replace("</box>", "")
+                .replace("(", "")
+                .replace(")", "")
+                for coord in coords
+            ]
+            coords = [coord.split(",") for coord in coords]
+        elif "cog" in model_name.lower():
+            coords = re.findall(r"\[\[\d+,\d+,\d+,\d+\]\]", message)
+            coords = [coord.replace("[[", "").replace("]]", "") for coord in coords]
+            coords = [coord.split(",") for coord in coords]
+        else:
+            labels = []
+            coords = []
+
+        grasp_poses = {}
+        # Execute plan
+        for label in labels:
+            grasp_poses[label] = self.get_grasp_pose(coords[label])
+
+        res_object = cl.run_sync(
+            ask_helper(
+                cl.AskActionMessage(
+                    content="Select object to grasp!",
+                    actions=[
+                        cl.Action(name="object", value=label, label=label)
+                        for label in labels
+                    ],
+                )
+            )
+        )
+        res_where = cl.run_sync(
+            ask_helper(
+                cl.AskActionMessage(
+                    content="Select where to place the object!",
+                    actions=[
+                        cl.Action(name="where", value=label, label=label)
+                        for label in labels
+                    ],
+                )
+            )
+        )
+        if res_object.get("object") is not None and res_where.get("where") is not None:
+            object_to_grasp = res_object.get("object")
+            where_to_place = res_where.get("where")
+            success = self.ur5_excute(
+                object_to_grasp,
+                grasp_poses[object_to_grasp],
+                grasp_poses[where_to_place],
+            )
+            print(success)
+        super(ChainlitRobotAgent, self).send(
             message=message,
             recipient=recipient,
             request_reply=request_reply,
@@ -164,12 +272,12 @@ async def on_chat_start():
     config_list = config_list_from_json(env_or_file="OAI_CONFIG_LIST")
 
     models = [
-                    "llava-1.5",
-                    "cogvlm-chat",
-                    "cogagent-chat",
-                    "cogvlm-grounding-generalist",
-                    "qwen-vl-chat",
-                ]
+        "llava-1.5",
+        "cogvlm-chat",
+        "cogagent-chat",
+        "cogvlm-grounding-generalist",
+        "qwen-vl-chat",
+    ]
 
     settings = await cl.ChatSettings(
         [
@@ -199,55 +307,99 @@ async def on_chat_start():
                 id="with_grounding",
                 label="CogVLM/Qwen-VL - with grounding",
                 inital=False,
-            )
+            ),
         ]
     ).send()
 
-    vision_assistant = ChainlitVisionAgent(
-        name="vision_assistant",
-        system_message="A vision assistant",
+    vision_planner = ChainlitVisionAgent(
+        name="Vision Planner",
+        system_message="Vision Planner. Suggest a plan with steps based on the vision inputs for robot agent to execute.",
         llm_config={"config_list": config_list},
     )
     user_proxy = ChainlitUserProxyAgent(
-        "user_proxy",
+        "Human Proxy",
+        system_message="Human Proxy. Interact with the vision planner to discuss the plan.",
+        code_execution_config={
+            "work_dir": "workspace",
+            "use_docker": False,
+        },
+    )
+    robot_agent = ChainlitRobotAgent(
+        "Robot Agent",
+        system_message="Robot Agent. Receive the plan and execute actions step by step based on the plan.",
         code_execution_config={
             "work_dir": "workspace",
             "use_docker": False,
         },
     )
 
-    user_session.set("VISION_AGENT", vision_assistant)
+    # Create group chat
+    groupchat = GroupChat(
+        agents=[user_proxy, vision_planner, robot_agent], messages=[], max_round=50
+    )
+    manager = GroupChatManager(
+        groupchat=groupchat, llm_config={"config_list": config_list}
+    )
+
+    user_session.set("VISION_PLANNER", vision_planner)
     user_session.set("USER_PROXY", user_proxy)
+    user_session.set("ROBOT_AGENT", robot_agent)
+    user_session.set("GROUPCHAT_MANAGER", manager)
     user_session.set("SETTINGS", settings)
+
 
 @cl.on_settings_update
 async def setup_agent(settings):
     config_list = config_list_from_json(env_or_file="OAI_CONFIG_LIST")
     for k, v in settings.items():
         config_list[0][k] = v
-    
+
     print(config_list)
-    vision_assistant = ChainlitVisionAgent(
-        name="vision_assistant",
-        system_message="A vision assistant",
+    vision_planner = ChainlitVisionAgent(
+        name="Vision Planner",
+        system_message="Vision Planner. Suggest a plan with steps based on the vision inputs for robot agent to execute.",
         llm_config={"config_list": config_list},
     )
     user_proxy = ChainlitUserProxyAgent(
-        "user_proxy",
+        "Human Proxy",
+        system_message="Human Proxy. Interact with the vision planner to discuss the plan.",
+        code_execution_config={
+            "work_dir": "workspace",
+            "use_docker": False,
+        },
+    )
+    robot_agent = ChainlitRobotAgent(
+        "Robot Agent",
+        system_message="Robot Agent. Receive the plan and execute actions step by step based on the plan.",
         code_execution_config={
             "work_dir": "workspace",
             "use_docker": False,
         },
     )
 
-    if settings["model"] in ["cogagent-chat", "cogvlm-grounding-generalist", "qwen-vl-chat"]:
+    # Create group chat
+    groupchat = GroupChat(
+        agents=[user_proxy, vision_planner, robot_agent], messages=[], max_round=50
+    )
+    manager = GroupChatManager(
+        groupchat=groupchat, llm_config={"config_list": config_list}
+    )
+
+    if settings["model"] in [
+        "cogagent-chat",
+        "cogvlm-grounding-generalist",
+        "qwen-vl-chat",
+    ]:
         with_grounding = settings["with_grounding"]
     else:
         with_grounding = False
     user_session.set("WITH_GROUNDING", with_grounding)
-    user_session.set("VISION_AGENT", vision_assistant)
+    user_session.set("VISION_PLANNER", vision_planner)
     user_session.set("USER_PROXY", user_proxy)
+    user_session.set("ROBOT_AGENT", robot_agent)
+    user_session.set("GROUPCHAT_MANAGER", manager)
     user_session.set("SETTINGS", settings)
+
 
 # On message
 @cl.on_message
@@ -262,11 +414,23 @@ async def main(message: cl.Message):
     # Processing images (if any)
     images = [file for file in message.elements if "image" in file.mime]
 
+    # Retrieve Robot Agent
+    robot_agent = user_session.get("ROBOT_AGENT")
+    # Capture the video frame
+    frame = robot_agent.get_image()
+    if frame is not None:
+        cv2.imwrite(".tmp.png", frame)
+        image = cl.Image(name="tmp_image", path=".tmp.png")
+        images = [image]
+
     # Retrieve Vision Agent
-    vision_agent = user_session.get("VISION_AGENT")
+    vision_planner = user_session.get("VISION_PLANNER")
 
     # Retrive User Proxy
     user_proxy = user_session.get("USER_PROXY")
+
+    # Retrive GroupChat Manager
+    manager = user_session.get("GROUPCHAT_MANAGER")
 
     # Retrive with grounding property
     with_grounding = user_session.get("WITH_GROUNDING")
@@ -281,10 +445,11 @@ async def main(message: cl.Message):
         prompt = message.content + new_token
 
     await cl.Message(
-        content=f"Vision agent working on task: '{message.content}.'"
+        content=f"Vision agent working on task: '{message.content}.'",
+        elements=images,
     ).send()
 
     await cl.make_async(user_proxy.initiate_chat)(
-        vision_agent,
+        manager,
         message=prompt,
     )
