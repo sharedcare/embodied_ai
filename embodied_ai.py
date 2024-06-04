@@ -24,6 +24,20 @@ from chainlit.input_widget import Select, Switch, Slider
 import chainlit as cl
 
 
+USER_PROXY_SYSTEM_MESSAGE="Human Proxy. Only receives messages from Vision Planner and not particuss the cipates in the planning."
+VISION_PLANNER_SYSTEM_MESSAGE="""
+You are a Vision Planner. You are supposed to suggest a plan with steps based on the vision inputs for robot agent to execute.
+
+When you receive a task, follow these steps:
+    1. Identify the User's Intent: Understand the task and its context. The intent might involve moving the robot arm, manipulating objects, or gathering information.
+    2. You come up with a logical plan to achieve the task. Your message must be a step by step sequential plan and each step should start with <step> tag.
+
+You send your plan to Robot Agent, who runs each sub task one by one.
+
+Your task:
+"""
+ROBOT_AGENT_SYSTEM_MESSAGE="Robot Agent. Receive the plan and execute actions step by step based on the plan."
+
 async def ask_helper(func, **kwargs):
     res = await func(**kwargs).send()
     while not res:
@@ -168,30 +182,28 @@ class ChainlitRobotAgent(RobotAgent):
 
         res_object = cl.run_sync(
             ask_helper(
-                cl.AskActionMessage(
-                    content="Select object to grasp!",
-                    actions=[
-                        cl.Action(name="object", value=label, label=label)
-                        for label in labels
-                    ],
-                )
+                cl.AskActionMessage,
+                content="Select object to grasp!",
+                actions=[
+                    cl.Action(name="object", value=label, label=label)
+                    for label in labels
+                ],
             )
         )
         res_where = cl.run_sync(
             ask_helper(
-                cl.AskActionMessage(
-                    content="Select where to place the object!",
-                    actions=[
-                        cl.Action(name="where", value=label, label=label)
-                        for label in labels
-                    ],
-                )
+                cl.AskActionMessage,
+                content="Select where to place the object!",
+                actions=[
+                    cl.Action(name="where", value=label, label=label)
+                    for label in labels
+                ],
             )
         )
         if res_object.get("object") is not None and res_where.get("where") is not None:
             object_to_grasp = res_object.get("object")
             where_to_place = res_where.get("where")
-            success = self.ur5_excute(
+            success = self.robot_execute(
                 object_to_grasp,
                 grasp_poses[object_to_grasp],
                 grasp_poses[where_to_place],
@@ -258,6 +270,20 @@ class ChainlitUserProxyAgent(UserProxyAgent):
             silent=silent,
         )
 
+def state_transition(last_speaker: Agent, groupchat: GroupChat):
+    messages = groupchat.messages
+    robot_agent = user_session.get("ROBOT_AGENT")
+    vision_planner = user_session.get("VISION_PLANNER")
+    user_proxy = user_session.get("USER_PROXY")
+
+    if last_speaker is user_proxy:
+        return vision_planner
+    elif last_speaker is vision_planner:
+        return robot_agent
+    elif last_speaker is robot_agent:
+        if messages[-1]["content"] == "success":
+            return user_proxy
+
 
 @cl.on_chat_start
 async def on_chat_start():
@@ -290,9 +316,9 @@ async def on_chat_start():
             Slider(
                 id="temperature",
                 label="Temperature",
-                initial=0.8,
+                initial=0.2,
                 min=0,
-                max=2,
+                max=1,
                 step=0.1,
             ),
             Slider(
@@ -313,21 +339,13 @@ async def on_chat_start():
 
     vision_planner = ChainlitVisionAgent(
         name="Vision Planner",
-        system_message="""
-        You are a Vision Planner. You are supposed to suggest a plan with steps based on the vision inputs for robot agent to execute.
-        
-        When you receive a task, follow these steps:
-            1. Identify the User's Intent: Understand the task and its context. The intent might involve moving the robot arm, manipulating objects, or gathering information.
-            2. You come up with a logical plan to achieve the task. Your message must be a step by step sequential plan. If any visible object mentioned in the plan, you should include position with grounding.
-        
-        You send your plan to Robot Agent, who runs each sub task one by one.
-        """,
+        system_message=VISION_PLANNER_SYSTEM_MESSAGE,
         human_input_mode="NEVER",
         llm_config={"config_list": config_list},
     )
     user_proxy = ChainlitUserProxyAgent(
         "Human Proxy",
-        system_message="Human Proxy. Only receives messages from Vision Planner and not particuss the cipates in the planning.",
+        system_message=USER_PROXY_SYSTEM_MESSAGE,
         code_execution_config={
             "work_dir": "workspace",
             "use_docker": False,
@@ -335,7 +353,7 @@ async def on_chat_start():
     )
     robot_agent = ChainlitRobotAgent(
         "Robot Agent",
-        system_message="Robot Agent. Receive the plan and execute actions step by step based on the plan.",
+        system_message=ROBOT_AGENT_SYSTEM_MESSAGE,
         human_input_mode="NEVER",
         code_execution_config=False,
         llm_config=None,
@@ -343,7 +361,7 @@ async def on_chat_start():
 
     # Create group chat
     groupchat = GroupChat(
-        agents=[user_proxy, vision_planner, robot_agent], messages=[], max_round=50
+        agents=[user_proxy, vision_planner, robot_agent], messages=[], max_round=10, speaker_selection_method=state_transition,
     )
     manager = GroupChatManager(
         groupchat=groupchat, llm_config={"config_list": config_list}
@@ -365,21 +383,13 @@ async def setup_agent(settings):
     print(config_list)
     vision_planner = ChainlitVisionAgent(
         name="Vision Planner",
-        system_message="""
-        You are a Vision Planner. You are supposed to suggest a plan with steps based on the vision inputs for robot agent to execute.
-        
-        When you receive a task, follow these steps:
-            1. Identify the User's Intent: Understand the task and its context. The intent might involve moving the robot arm, manipulating objects, or gathering information.
-            2. You come up with a logical plan to achieve the task. Your message must be a step by step sequential plan. If any visible object mentioned in the plan, you should include position with grounding.
-        
-        You send your plan to Robot Agent, who runs each sub task one by one.
-        """,
+        system_message=VISION_PLANNER_SYSTEM_MESSAGE,
         human_input_mode="NEVER",
         llm_config={"config_list": config_list},
     )
     user_proxy = ChainlitUserProxyAgent(
         "Human Proxy",
-        system_message="Human Proxy. Only receives messages from Vision Planner and not particuss the cipates in the planning.",
+        system_message=USER_PROXY_SYSTEM_MESSAGE,
         code_execution_config={
             "work_dir": "workspace",
             "use_docker": False,
@@ -387,7 +397,7 @@ async def setup_agent(settings):
     )
     robot_agent = ChainlitRobotAgent(
         "Robot Agent",
-        system_message="Robot Agent. Receive the plan and execute actions step by step based on the plan.",
+        system_message=ROBOT_AGENT_SYSTEM_MESSAGE,
         human_input_mode="NEVER",
         code_execution_config=False,
         llm_config=None,
@@ -395,7 +405,7 @@ async def setup_agent(settings):
 
     # Create group chat
     groupchat = GroupChat(
-        agents=[user_proxy, vision_planner, robot_agent], messages=[], max_round=50
+        agents=[user_proxy, vision_planner, robot_agent], messages=[], max_round=10, speaker_selection_method=state_transition,
     )
     manager = GroupChatManager(
         groupchat=groupchat, llm_config={"config_list": config_list}
