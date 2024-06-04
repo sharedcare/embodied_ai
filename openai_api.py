@@ -397,7 +397,11 @@ def process_qwen_history(
             if i == len(messages) - 1:  # 最后一条用户消息
                 last_user_query = image_query + text_content
             else:
-                formatted_history.append((image_query + text_content, ""))
+                if formatted_history:
+                    if formatted_history[-1][1] == "":
+                        formatted_history[-1] = (formatted_history[-1][0], text_content)
+                else:
+                    formatted_history.append((image_query + text_content, ""))
             image_list = []
         elif role == "assistant":
             if formatted_history:
@@ -408,6 +412,11 @@ def process_qwen_history(
                 formatted_history[-1] = (formatted_history[-1][0], text_content)
             else:
                 assert False, f"assistant reply before user"
+        elif role == "system":
+            if i == len(messages) - 1:
+                last_user_query += text_content
+            else:
+                formatted_history.append((text_content, ""))
         else:
             assert False, f"unrecognized role: {role}"
 

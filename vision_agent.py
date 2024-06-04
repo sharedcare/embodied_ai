@@ -68,7 +68,7 @@ def vision_call(
     }
 
     response = requests.post(
-            config["base_url"].rstrip("/") + "/v1/chat/completions", headers=headers, json=data, stream=use_stream
+            config["base_url"].rstrip("/") + "/chat/completions", headers=headers, json=data, stream=use_stream
         )
 
     if response.status_code == 200:

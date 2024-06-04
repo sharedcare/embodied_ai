@@ -4,13 +4,13 @@ import numpy as np
 import cv2
 
 from PIL import Image
-from autogen import UserProxyAgent
+from autogen import ConversableAgent
 
 
 DEFAULT_ROBOT_SYS_MSG = "You are a robot agent."
 
 
-class RobotAgent(UserProxyAgent):
+class RobotAgent(ConversableAgent):
     def __init__(
         self,
         name: str,
@@ -38,7 +38,7 @@ class RobotAgent(UserProxyAgent):
     def get_image(self):
         """Get RGB image data from the robot's camera"""
         if os.path.exists(".tmp/image.png"):
-            return Image.open(".tmp/image.png")
+            return cv2.imread(".tmp/image.png")
         else:
             cam = cv2.VideoCapture(0)
             result, image = cam.read()

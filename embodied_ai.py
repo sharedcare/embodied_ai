@@ -266,8 +266,8 @@ async def on_chat_start():
     user_session.set("MESSAGE_HISTORY", message_history)
 
     # With grounding
-    with_grounding = False
-    user_session.set("WITH_GROUNDING", with_grounding)
+    # with_grounding = False
+    # user_session.set("WITH_GROUNDING", with_grounding)
 
     config_list = config_list_from_json(env_or_file="OAI_CONFIG_LIST")
 
@@ -303,22 +303,31 @@ async def on_chat_start():
                 max=1024,
                 step=2,
             ),
-            Switch(
-                id="with_grounding",
-                label="CogVLM/Qwen-VL - with grounding",
-                inital=False,
-            ),
+            # Switch(
+            #     id="with_grounding",
+            #     label="CogVLM/Qwen-VL - with grounding",
+            #     inital=False,
+            # ),
         ]
     ).send()
 
     vision_planner = ChainlitVisionAgent(
         name="Vision Planner",
-        system_message="Vision Planner. Suggest a plan with steps based on the vision inputs for robot agent to execute.",
+        system_message="""
+        You are a Vision Planner. You are supposed to suggest a plan with steps based on the vision inputs for robot agent to execute.
+        
+        When you receive a task, follow these steps:
+            1. Identify the User's Intent: Understand the task and its context. The intent might involve moving the robot arm, manipulating objects, or gathering information.
+            2. You come up with a logical plan to achieve the task. Your message must be a step by step sequential plan. If any visible object mentioned in the plan, you should include position with grounding.
+        
+        You send your plan to Robot Agent, who runs each sub task one by one.
+        """,
+        human_input_mode="NEVER",
         llm_config={"config_list": config_list},
     )
     user_proxy = ChainlitUserProxyAgent(
         "Human Proxy",
-        system_message="Human Proxy. Interact with the vision planner to discuss the plan.",
+        system_message="Human Proxy. Only receives messages from Vision Planner and not particuss the cipates in the planning.",
         code_execution_config={
             "work_dir": "workspace",
             "use_docker": False,
@@ -327,10 +336,9 @@ async def on_chat_start():
     robot_agent = ChainlitRobotAgent(
         "Robot Agent",
         system_message="Robot Agent. Receive the plan and execute actions step by step based on the plan.",
-        code_execution_config={
-            "work_dir": "workspace",
-            "use_docker": False,
-        },
+        human_input_mode="NEVER",
+        code_execution_config=False,
+        llm_config=None,
     )
 
     # Create group chat
@@ -357,12 +365,21 @@ async def setup_agent(settings):
     print(config_list)
     vision_planner = ChainlitVisionAgent(
         name="Vision Planner",
-        system_message="Vision Planner. Suggest a plan with steps based on the vision inputs for robot agent to execute.",
+        system_message="""
+        You are a Vision Planner. You are supposed to suggest a plan with steps based on the vision inputs for robot agent to execute.
+        
+        When you receive a task, follow these steps:
+            1. Identify the User's Intent: Understand the task and its context. The intent might involve moving the robot arm, manipulating objects, or gathering information.
+            2. You come up with a logical plan to achieve the task. Your message must be a step by step sequential plan. If any visible object mentioned in the plan, you should include position with grounding.
+        
+        You send your plan to Robot Agent, who runs each sub task one by one.
+        """,
+        human_input_mode="NEVER",
         llm_config={"config_list": config_list},
     )
     user_proxy = ChainlitUserProxyAgent(
         "Human Proxy",
-        system_message="Human Proxy. Interact with the vision planner to discuss the plan.",
+        system_message="Human Proxy. Only receives messages from Vision Planner and not particuss the cipates in the planning.",
         code_execution_config={
             "work_dir": "workspace",
             "use_docker": False,
@@ -371,10 +388,9 @@ async def setup_agent(settings):
     robot_agent = ChainlitRobotAgent(
         "Robot Agent",
         system_message="Robot Agent. Receive the plan and execute actions step by step based on the plan.",
-        code_execution_config={
-            "work_dir": "workspace",
-            "use_docker": False,
-        },
+        human_input_mode="NEVER",
+        code_execution_config=False,
+        llm_config=None,
     )
 
     # Create group chat
@@ -385,15 +401,15 @@ async def setup_agent(settings):
         groupchat=groupchat, llm_config={"config_list": config_list}
     )
 
-    if settings["model"] in [
-        "cogagent-chat",
-        "cogvlm-grounding-generalist",
-        "qwen-vl-chat",
-    ]:
-        with_grounding = settings["with_grounding"]
-    else:
-        with_grounding = False
-    user_session.set("WITH_GROUNDING", with_grounding)
+    # if settings["model"] in [
+    #     "cogagent-chat",
+    #     "cogvlm-grounding-generalist",
+    #     "qwen-vl-chat",
+    # ]:
+    #     with_grounding = settings["with_grounding"]
+    # else:
+    #     with_grounding = False
+    # user_session.set("WITH_GROUNDING", with_grounding)
     user_session.set("VISION_PLANNER", vision_planner)
     user_session.set("USER_PROXY", user_proxy)
     user_session.set("ROBOT_AGENT", robot_agent)
@@ -433,8 +449,9 @@ async def main(message: cl.Message):
     manager = user_session.get("GROUPCHAT_MANAGER")
 
     # Retrive with grounding property
-    with_grounding = user_session.get("WITH_GROUNDING")
-    new_token = "(with grounding)" if with_grounding else ""
+    # with_grounding = user_session.get("WITH_GROUNDING")
+    # new_token = "(with grounding)" if with_grounding else ""
+    new_token = ""
 
     if len(images) >= 1:
         # Set input with image
@@ -452,4 +469,5 @@ async def main(message: cl.Message):
     await cl.make_async(user_proxy.initiate_chat)(
         manager,
         message=prompt,
+        clear_history=False,
     )
