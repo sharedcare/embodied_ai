@@ -24,18 +24,30 @@ from chainlit.input_widget import Select, Switch, Slider
 import chainlit as cl
 
 
-USER_PROXY_SYSTEM_MESSAGE="Human Proxy. Only receives messages from Vision Planner and not particuss the cipates in the planning."
+USER_PROXY_SYSTEM_MESSAGE="Human Proxy. Only receives messages from Vision Planner and not participates in the planning."
 VISION_PLANNER_SYSTEM_MESSAGE="""
-You are a Vision Planner. You are supposed to suggest a plan with steps based on the vision inputs for robot agent to execute.
+You are a Vision Planner. You are supposed to suggest a plan with steps based on the input image for robot agent to execute.
 
 When you receive a task, follow these steps:
     1. Identify the User's Intent: Understand the task and its context. The intent might involve moving the robot arm, manipulating objects, or gathering information.
-    2. You come up with a logical plan to achieve the task. Your message must be a step by step sequential plan and each step should start with <step> tag.
+    2. You come up with a logical plan to achieve the task. Your message must be a step by step sequential plan in 3-10 steps and each step should start with <step> tag.
+    3. If an object mentioned in the plan is visible in the input image, your message should output the bounding box with label in <ref>object</ref><box>(x0,y0),(x1,y1)</box> format.
 
 You send your plan to Robot Agent, who runs each sub task one by one.
 
+For example,
+--------------------
 Your task:
-"""
+Put Orange on the Racket.\n
+User's Intent:
+The user wants the robot arm to pick up an Orange and place it on top of a Racket.\n
+Plan:
+<step> 1. Move the arm to the position of the Racket.
+<step> 2. Use the arm to pick up the Orange.
+<step> 3. Move the arm to the position of the Racket.
+<step> 4. Place the Orange on top of the Racket.
+--------------------
+Your task:"""
 ROBOT_AGENT_SYSTEM_MESSAGE="Robot Agent. Receive the plan and execute actions step by step based on the plan."
 
 async def ask_helper(func, **kwargs):
