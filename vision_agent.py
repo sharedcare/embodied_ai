@@ -129,11 +129,15 @@ class VisionAgent(MultimodalConversableAgent):
         if messages is None:
             messages = self._oai_messages[sender]
 
+        system_message = content_str(self.system_message) + "\n"
+
         for msg in messages:
             for d in msg["content"]:
                 if d["type"] == "image_url":
                     d["image_url"]["url"] = f'data:image/png;base64,{get_image_data(d["image_url"]["url"])}'
                 elif d["type"] == "text":
+                    d["text"] = system_message + d["text"]
+                    system_message = ""
                     print(colored(d["text"], "blue"))
 
         # The formats for CogVLM, LLaVa and GPT are different. So, we manually handle them here.
