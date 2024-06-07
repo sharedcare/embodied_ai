@@ -46,10 +46,10 @@ class RobotAgent(ConversableAgent):
 
     def get_object_position(self, bounding_box):
         """Get object position in the real world with (x, y, z)"""
-        x0 = bounding_box[0]
-        y0 = bounding_box[1]
-        x1 = bounding_box[2]
-        y1 = bounding_box[3]
+        x0 = int(bounding_box[0])
+        y0 = int(bounding_box[1])
+        x1 = int(bounding_box[2])
+        y1 = int(bounding_box[3])
         x = (x0 + x1) / 2
         y = (y0 + y1) / 2
         z = 10
@@ -58,10 +58,10 @@ class RobotAgent(ConversableAgent):
 
     def get_grasp_pose(self, bounding_box):
         """Get grasp pose for the robot arm with [x, y, z, roll, pitch, yaw, gripper_closed]"""
-        x0 = bounding_box[0]
-        y0 = bounding_box[1]
-        x1 = bounding_box[2]
-        y1 = bounding_box[3]
+        x0 = int(bounding_box[0])
+        y0 = int(bounding_box[1])
+        x1 = int(bounding_box[2])
+        y1 = int(bounding_box[3])
         x = (x0 + x1) / 20
         y = (y0 + y1) / 20
         z = 1
