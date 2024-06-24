@@ -71,6 +71,10 @@ Plan:
 [step] TERMINATE
 --------------------
 Your task:"""
+VISION_CRITIC_SYSTEM_MESSAGE = f"""
+You are a Vision Critic. You are supposed to revise and double check plan from Vision Planner and provide feedback. Refine the plan if it is not correct or reasonable. Follow the instructions from Vision Planner:
+'{VISION_PLANNER_SYSTEM_MESSAGE}'
+"""
 VISION_ASSISTANT_SYSTEM_MESSAGE = "You are a Vision Assistant. You are supposed to help Vision Planner to locate object in the image. If an object mentioned in the plan is visible in the input image, your message should output the bounding box with label"
 ROBOT_AGENT_SYSTEM_MESSAGE = "Robot Agent. Receive the plan and execute actions step by step based on the plan."
 
@@ -120,6 +124,57 @@ class ChainlitVisionAgent(VisionAgent):
             cl.Message(
                 content=f'*Sending message to "{recipient.name}":*\n\n{prompt_msg}',
                 author="Vision Planner",
+            ).send()
+        )
+
+        super(ChainlitVisionAgent, self).send(
+            message=prompt_msg,
+            recipient=recipient,
+            request_reply=request_reply,
+            silent=silent,
+        )
+
+
+class ChainlitVisionCritic(VisionAgent):
+    def send(
+        self,
+        message: Union[Dict, str],
+        recipient: Agent,
+        request_reply: Optional[bool] = None,
+        silent: Optional[bool] = False,
+    ) -> bool:
+        model_name = user_session.get("SETTINGS")["model"]
+        plan = message.split("[step]")[1:-1]
+        plan = [step.strip() for step in plan]
+        user_session.set("PLAN", plan)
+
+        labels = re.findall(r"<.+?(?=>)>", message)
+        labels = [
+            label.replace("<", "").replace(">", "").strip() for label in set(labels)
+        ]
+        objects = {key: None for key in labels}
+        user_session.set("OBJECTS", objects)
+        img_path = user_session.get("IMAGE").path
+
+        if "qwen" in model_name.lower():
+            obj_prompt = ""
+            for label in labels:
+                obj_prompt += label + ","
+            prompt_msg = f"The location of {obj_prompt[:-1]}:<img {img_path}>"
+        elif "cog" in model_name.lower():
+            prompt_msg = f"Where is {labels[0]} using the format [[x1,y1,x2,y2]]."
+
+        cl.run_sync(
+            cl.Message(
+                content=f"Plan:\n{message}",
+                author="Vision Critic",
+            ).send()
+        )
+
+        cl.run_sync(
+            cl.Message(
+                content=f'*Sending message to "{recipient.name}":*\n\n{prompt_msg}',
+                author="Vision Critic",
             ).send()
         )
 
@@ -333,19 +388,22 @@ class ChainlitUserProxyAgent(UserProxyAgent):
 
 def state_transition(last_speaker: Agent, groupchat: GroupChat):
     """
-    Routing: Human -> UserProxy -> VisionPlanner -> VisionAssistant -- located all Objects -- VisionAssistant -> RobotAgent
-                                                          |                                                          |
-                                                          |-------------- no Object need to be located --------------|
+    Routing: Human -> UserProxy -> VisionPlanner -> VisionCritic -> VisionAssistant -- located all Objects -- VisionAssistant -> RobotAgent
+                                                                            |                                                          |
+                                                                            |-------------- no Object need to be located --------------|
     """
     messages = groupchat.messages
     robot_agent = user_session.get("ROBOT_AGENT")
     vision_planner = user_session.get("VISION_PLANNER")
+    vision_critic = user_session.get("VISION_CRITIC")
     vision_assistant = user_session.get("VISION_ASSISTANT")
     user_proxy = user_session.get("USER_PROXY")
 
     if last_speaker is user_proxy:
         return vision_planner
     elif last_speaker is vision_planner:
+        return vision_critic
+    elif last_speaker is vision_critic:
         objects = user_session.get("OBJECTS")
         if objects is None:
             return robot_agent
@@ -427,6 +485,12 @@ def setup_agent(config):
         human_input_mode="NEVER",
         llm_config={"config_list": config},
     )
+    vision_critic = ChainlitVisionAgent(
+        name="Vision Critic",
+        system_message=VISION_CRITIC_SYSTEM_MESSAGE,
+        human_input_mode="NEVER",
+        llm_config={"config_list": config},
+    )
     vision_assistant = ChainlitVisionAssistant(
         name="Vision Assistant",
         system_message=VISION_ASSISTANT_SYSTEM_MESSAGE,
@@ -451,7 +515,7 @@ def setup_agent(config):
 
     # Create group chat
     groupchat = GroupChat(
-        agents=[user_proxy, vision_planner, vision_assistant, robot_agent],
+        agents=[user_proxy, vision_planner, vision_critic, vision_assistant, robot_agent],
         messages=[],
         max_round=20,
         speaker_selection_method=state_transition,
@@ -459,6 +523,7 @@ def setup_agent(config):
     manager = GroupChatManager(groupchat=groupchat, llm_config={"config_list": config})
 
     user_session.set("VISION_PLANNER", vision_planner)
+    user_session.set("VISION_CRITIC", vision_critic)
     user_session.set("VISION_ASSISTANT", vision_assistant)
     user_session.set("USER_PROXY", user_proxy)
     user_session.set("ROBOT_AGENT", robot_agent)
