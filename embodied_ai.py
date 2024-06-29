@@ -73,7 +73,22 @@ Plan:
 Your task:"""
 VISION_CRITIC_SYSTEM_MESSAGE = f"""
 You are a Vision Critic. You are supposed to revise and double check plan from Vision Planner and provide feedback. Refine the plan if it is not correct or reasonable. Follow the instructions from Vision Planner:
-'{VISION_PLANNER_SYSTEM_MESSAGE}'
+
+Allowed actions:
+reach_to <object> (where): move arm to a position of an object
+go_home: move arm to initial position
+close_gripper: close hand gripper
+open_gripper: open hand gripper
+open <object>: open an object, it can be a door or a drawer
+close <object>: close an object, it can be a door or a drawer
+pick_up <object>: move arm to pick up an object
+place <a_object> <b_object> (where): move arm to place object on hand to a position of another object
+wait time(second): wait and do not move for certain time on second
+TERMINATE: end of plan
+
+(where) is a position of the object, you can only choose one of (above), (bottom), (front), (rear), (left), (right) and (center).
+
+Plan:
 """
 VISION_ASSISTANT_SYSTEM_MESSAGE = "You are a Vision Assistant. You are supposed to help Vision Planner to locate object in the image. If an object mentioned in the plan is visible in the input image, your message should output the bounding box with label"
 ROBOT_AGENT_SYSTEM_MESSAGE = "Robot Agent. Receive the plan and execute actions step by step based on the plan."
@@ -105,25 +120,28 @@ class ChainlitVisionAgent(VisionAgent):
         user_session.set("OBJECTS", objects)
         img_path = user_session.get("IMAGE").path
 
-        if "qwen" in model_name.lower():
-            obj_prompt = ""
-            for label in labels:
-                obj_prompt += label + ","
-            prompt_msg = f"The location of {obj_prompt[:-1]}:<img {img_path}>"
-        elif "cog" in model_name.lower():
-            prompt_msg = f"Where is {labels[0]} using the format [[x1,y1,x2,y2]]."
-
         cl.run_sync(
             cl.Message(
                 content=f"Plan:\n{message}",
-                author="Vision Planner",
+                author=self.name,
             ).send()
         )
+
+        if self.name == "Vision Critic":
+            if "qwen" in model_name.lower():
+                obj_prompt = ""
+                for label in labels:
+                    obj_prompt += label + ","
+                prompt_msg = f"The location of {obj_prompt[:-1]}:<img {img_path}>"
+            elif "cog" in model_name.lower():
+                prompt_msg = f"Where is {labels[0]} using the format [[x1,y1,x2,y2]]."
+        elif self.name == "Vision Planner":
+            prompt_msg = f"{message}\n\nRefined plan:"
 
         cl.run_sync(
             cl.Message(
                 content=f'*Sending message to "{recipient.name}":*\n\n{prompt_msg}',
-                author="Vision Planner",
+                author=self.name,
             ).send()
         )
 
